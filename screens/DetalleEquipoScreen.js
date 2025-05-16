@@ -1,14 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  View, Text, ScrollView, StyleSheet, 
-  ActivityIndicator, Button, TouchableOpacity 
+  View, 
+  Text, 
+  ScrollView, 
+  StyleSheet, 
+  ActivityIndicator, 
+  TouchableOpacity,
+  Button
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation, useRoute } from '@react-navigation/native';
 
 const DetalleEquipoScreen = () => {
   const navigation = useNavigation();
   const route = useRoute();
-  const { id } = route.params || {};
+  const { equipoId } = route.params || {};
   const [equipo, setEquipo] = useState(null);
   const [historial, setHistorial] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -16,75 +22,72 @@ const DetalleEquipoScreen = () => {
 
   // Configuración de estados con colores
   const estadosConfig = {
-    1: { nombre: "Ingreso", color: "#ff9500" },
-    2: { nombre: "En espera", color: "#a5a5a5" },
-    3: { nombre: "Calibrando", color: "#4fc3f7" },
-    4: { nombre: "Calibrado", color: "#4a6fa5" },
-    5: { nombre: "Etiquetado", color: "#16a085" },
-    6: { nombre: "Certificado emitido", color: "#27ae60" },
-    7: { nombre: "Listo para entrega", color: "#2ecc71" },
-    8: { nombre: "Entregado", color: "#16a085" }
+    "Ingreso": { color: "#ff9500" },
+    "En espera": { color: "#a5a5a5" },
+    "Calibrando": { color: "#4fc3f7" },
+    "Calibrado": { color: "#4a6fa5" },
+    "Etiquetado": { color: "#16a085" },
+    "Certificado emitido": { color: "#27ae60" },
+    "Listo para entrega": { color: "#2ecc71" },
+    "Entregado": { color: "#16a085" }
   };
 
   useEffect(() => {
-    const fetchData = async () => {
+    const fetchEquipoDetalle = async () => {
       try {
         setLoading(true);
         setError(null);
-  
-        // Obtener datos del equipo, su historial y usuarios en paralelo
-        const [equipoResponse, historialResponse, usuariosResponse] = await Promise.all([
-          fetch(`http://192.168.0.114:8000/api/equipos/${id}/`),
-          fetch(`http://192.168.0.114:8000/api/historial-equipos/?equipo_id=${id}`),
-          fetch(`http://192.168.0.114:8000/api/usuarios/`)
-        ]);
-  
-        if (!equipoResponse.ok) throw new Error("Error al cargar el equipo");
-        if (!historialResponse.ok) throw new Error("Error al cargar el historial");
-        if (!usuariosResponse.ok) throw new Error("Error al cargar los usuarios");
-  
-        const equipoData = await equipoResponse.json();
-        const historialData = await historialResponse.json();
-        const usuariosData = await usuariosResponse.json();
-  
-        // Crear un mapa de usuarios para búsqueda rápida
-        const usuariosMap = usuariosData.reduce((map, usuario) => {
-          map[usuario.id] = usuario.fullName || `${usuario.firstName} ${usuario.lastName}`;
-          return map;
-        }, {});
-  
-        // Procesar datos del equipo
-        const estadoActualId = equipoData.estado_actual?.id || 1;
-        setEquipo({
-          ...equipoData,
-          estado: estadoActualId
+        
+        const token = await AsyncStorage.getItem('access_token');
+        const response = await fetch(`http://192.168.0.26:8000/api/equipos/${equipoId}/`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
         });
-  
-        // Procesar historial
-        const historialProcesado = historialData
-          .sort((a, b) => new Date(b.fecha_cambio) - new Date(a.fecha_cambio))
-          .map(item => ({
-            id: item.id,
-            estado: estadosConfig[item.estado]?.nombre || "Desconocido",
-            color: estadosConfig[item.estado]?.color || "#000000",
-            usuario: usuariosMap[item.responsable] || "Sistema",
-            fecha: new Date(item.fecha_cambio).toLocaleString("es-ES"),
-            observaciones: item.observaciones || "Cambio de estado"
-          }));
-  
+
+        if (!response.ok) {
+          throw new Error("Error al cargar el detalle del equipo");
+        }
+
+        const data = await response.json();
+        
+        if (!data.equipo || !data.historial) {
+          throw new Error("Formato de datos incorrecto");
+        }
+
+        // Procesar datos del equipo
+        setEquipo(data.equipo);
+
+        // Procesar historial de estados
+        const historialProcesado = data.historial
+          .sort((a, b) => new Date(b.fecha) - new Date(a.fecha))
+          .map(item => {
+            const estadoNombre = item.estado || "Desconocido";
+            const estadoColor = estadosConfig[estadoNombre]?.color || "#000000";
+            
+            return {
+              id: item.id || `hist-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+              estado: estadoNombre,
+              color: estadoColor,
+              usuario: item.responsable || "Sistema",
+              fecha: new Date(item.fecha).toLocaleString("es-ES"),
+              observaciones: item.observaciones || "Cambio de estado"
+            };
+          });
+
         setHistorial(historialProcesado);
       } catch (err) {
-        setError(`Error: ${err.message}`);
-        console.error("Error fetching data:", err);
+        console.error("Error en fetchEquipoDetalle:", err);
+        setError(err.message);
       } finally {
         setLoading(false);
       }
     };
-  
-    if (id) {
-      fetchData();
+
+    if (equipoId) {
+      fetchEquipoDetalle();
     }
-  }, [id]);
+  }, [equipoId]);
 
   const handleVolver = () => navigation.goBack();
 
@@ -118,119 +121,165 @@ const DetalleEquipoScreen = () => {
     );
   }
 
-  const estadoActual = estadosConfig[equipo.estado] || estadosConfig[1];
+  const estadoActual = equipo.estado_actual || "Ingreso";
+  const estadoColor = estadosConfig[estadoActual]?.color || "#000000";
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Detalles del Equipo</Text>
-        <TouchableOpacity onPress={handleVolver}>
-          <Text style={styles.backButton}>←</Text>
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.gridContainer}>
-        {/* Información del equipo */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Información del Equipo</Text>
-          
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Nombre:</Text>
-            <Text style={styles.infoValue}>{equipo.nombre_equipo || "No especificado"}</Text>
-          </View>
-          
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Consecutivo:</Text>
-            <Text style={styles.infoValue}>{equipo.consecutivo || "No especificado"}</Text>
-          </View>
-          
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Marca:</Text>
-            <Text style={styles.infoValue}>{equipo.marca || "No especificado"}</Text>
-          </View>
-          
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Modelo:</Text>
-            <Text style={styles.infoValue}>{equipo.modelo || "No especificado"}</Text>
-          </View>
-          
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>N° Serie:</Text>
-            <Text style={styles.infoValue}>{equipo.numero_serie || "No especificado"}</Text>
-          </View>
-          
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Estado Actual:</Text>
-            <View style={[styles.estadoBadge, { backgroundColor: estadoActual.color }]}>
-              <Text style={styles.estadoBadgeText}>{estadoActual.nombre}</Text>
-            </View>
-          </View>
+    <View style={styles.mainContainer}>
+      <ScrollView 
+        contentContainerStyle={styles.scrollContent}
+        style={styles.scrollView}
+        showsVerticalScrollIndicator={true}
+      >
+        <View style={styles.header}>
+          <Text style={styles.title}>Detalles del Equipo</Text>
+          <TouchableOpacity onPress={handleVolver}>
+            <Text style={styles.backButton}>←</Text>
+          </TouchableOpacity>
         </View>
 
-        {/* Historial del equipo */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Historial de Estados</Text>
-          
-          {historial.length > 0 ? (
-            <>
-              <View style={styles.responsableSection}>
-                <Text style={styles.sectionTitle}>Último Responsable</Text>
-                <View style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>Usuario:</Text>
-                  <Text style={styles.infoValue}>{historial[0]?.usuario || "No asignado"}</Text>
-                </View>
-                <View style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>Fecha/Hora:</Text>
-                  <Text style={styles.infoValue}>{historial[0]?.fecha}</Text>
-                </View>
-              </View>
-
-              <View style={styles.historialSection}>
-                <Text style={styles.sectionTitle}>Registro Completo</Text>
-                <View style={styles.historialList}>
-                  {historial.map((item) => (
-                    <View key={item.id} style={styles.historialItem}>
-                      <View style={[styles.historialEstado, { backgroundColor: item.color }]}>
-                        <Text style={styles.historialEstadoText}>{item.estado}</Text>
-                      </View>
-                      <View style={styles.historialDetails}>
-                        <Text style={styles.historialUsuario}>{item.usuario}</Text>
-                        <Text style={styles.historialFecha}>{item.fecha}</Text>
-                        {item.observaciones && (
-                          <Text style={styles.historialAccion}>{item.observaciones}</Text>
-                        )}
-                      </View>
-                    </View>
-                  ))}
-                </View>
-              </View>
-            </>
-          ) : (
-            <View style={styles.sinHistorial}>
-              <Text>Este equipo no tiene historial registrado</Text>
+        <View style={styles.contentContainer}>
+          {/* Información del equipo */}
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Información del Equipo</Text>
+            
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Nombre:</Text>
+              <Text style={styles.infoValue}>{equipo.nombre_equipo || "No especificado"}</Text>
             </View>
-          )}
+            
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Consecutivo:</Text>
+              <Text style={styles.infoValue}>{equipo.consecutivo || "No especificado"}</Text>
+            </View>
+            
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Cliente:</Text>
+              <Text style={styles.infoValue}>{equipo.cliente || "No especificado"}</Text>
+            </View>
+            
+            {equipo.marca && (
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>Marca:</Text>
+                <Text style={styles.infoValue}>{equipo.marca}</Text>
+              </View>
+            )}
+            
+            {equipo.modelo && (
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>Modelo:</Text>
+                <Text style={styles.infoValue}>{equipo.modelo}</Text>
+              </View>
+            )}
+            
+            {equipo.numero_serie && (
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>N° Serie:</Text>
+                <Text style={styles.infoValue}>{equipo.numero_serie}</Text>
+              </View>
+            )}
+            
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Estado Actual:</Text>
+              <View style={[styles.estadoBadge, { backgroundColor: estadoColor }]}>
+                <Text style={styles.estadoBadgeText}>{estadoActual}</Text>
+              </View>
+            </View>
+            
+            {equipo.accesorios && (
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>Accesorios:</Text>
+                <Text style={styles.infoValue}>{equipo.accesorios}</Text>
+              </View>
+            )}
+            
+            {equipo.observaciones && (
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>Observaciones:</Text>
+                <Text style={styles.infoValue}>{equipo.observaciones}</Text>
+              </View>
+            )}
+          </View>
+
+          {/* Historial del equipo */}
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Historial de Estados</Text>
+            
+            {historial.length > 0 ? (
+              <>
+                <View style={styles.responsableSection}>
+                  <Text style={styles.sectionTitle}>Último Responsable</Text>
+                  <View style={styles.infoRow}>
+                    <Text style={styles.infoLabel}>Usuario:</Text>
+                    <Text style={styles.infoValue}>{historial[0]?.usuario || "No asignado"}</Text>
+                  </View>
+                  <View style={styles.infoRow}>
+                    <Text style={styles.infoLabel}>Fecha/Hora:</Text>
+                    <Text style={styles.infoValue}>{historial[0]?.fecha}</Text>
+                  </View>
+                </View>
+
+                <View style={styles.historialSection}>
+                  <Text style={styles.sectionTitle}>Registro Completo</Text>
+                  <View style={styles.historialList}>
+                    {historial.map((item) => (
+                      <View key={item.id} style={styles.historialItem}>
+                        <View style={[styles.historialEstado, { backgroundColor: item.color }]}>
+                          <Text style={styles.historialEstadoText}>{item.estado}</Text>
+                        </View>
+                        <View style={styles.historialDetails}>
+                          <Text style={styles.historialUsuario}>{item.usuario}</Text>
+                          <Text style={styles.historialFecha}>{item.fecha}</Text>
+                          {item.observaciones && (
+                            <Text style={styles.historialAccion}>{item.observaciones}</Text>
+                          )}
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              </>
+            ) : (
+              <View style={styles.sinHistorial}>
+                <Text>Este equipo no tiene historial registrado</Text>
+              </View>
+            )}
+          </View>
         </View>
-      </View>
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    padding: 20,
+  mainContainer: {
+    flex: 1,
     backgroundColor: '#f5f5f5',
+  },
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
+    padding: 20,
+    paddingBottom: 40,
+  },
+  contentContainer: {
+    flexDirection: 'column',
+    gap: 20,
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: '#f5f5f5',
   },
   errorContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
+    backgroundColor: '#f5f5f5',
   },
   errorContent: {
     alignItems: 'center',
@@ -245,6 +294,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
+    backgroundColor: '#f5f5f5',
   },
   header: {
     flexDirection: 'row',
@@ -259,10 +309,6 @@ const styles = StyleSheet.create({
   backButton: {
     fontSize: 24,
     fontWeight: 'bold',
-  },
-  gridContainer: {
-    flexDirection: 'column',
-    gap: 20,
   },
   card: {
     backgroundColor: '#fff',

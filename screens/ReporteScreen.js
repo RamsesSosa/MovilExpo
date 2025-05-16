@@ -7,6 +7,7 @@ import {
   Alert,
   Modal,
   FlatList,
+  ActivityIndicator
 } from 'react-native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
@@ -21,88 +22,81 @@ const aniosDisponibles = Array.from(
   (_, i) => (2000 + i).toString()
 );
 
-const ReporteScreen = ({
-  tiempoCalibracion = "N/A",
-  equiposPendientes = 0,
-  tecnicos = [],
-  volumenEquipos = {
-    recibidos: 0,
-    calibrados: 0,
-    entregados: 0,
-    pendientes: 0
-  }
-}) => {
+const API_BASE_URL = 'http://192.168.0.26:8000/api/';
+const METRICAS_VOLUMEN_URL = `${API_BASE_URL}metricas/volumen/`;
+
+const ReporteScreen = () => {
   const [mes, setMes] = useState(new Date().getMonth());
   const [anio, setAnio] = useState(new Date().getFullYear().toString());
+  const [loading, setLoading] = useState(false);
+  const [reporteData, setReporteData] = useState({
+    tiempoCalibracion: "N/A",
+    volumenEquipos: {
+      recibidos: 0,
+      calibrados: 0,
+      entregados: 0,
+      pendientes: 0
+    },
+    estados: {}
+  });
   
   const [mostrarModalMes, setMostrarModalMes] = useState(false);
   const [mostrarModalAnio, setMostrarModalAnio] = useState(false);
+
+  useEffect(() => {
+    fetchMetricasVolumen();
+  }, [mes, anio]);
+
+  const fetchMetricasVolumen = async () => {
+    setLoading(true);
+    try {
+      const response = await fetch(`${METRICAS_VOLUMEN_URL}?mes=${mes + 1}&anio=${anio}`);
+      if (!response.ok) {
+        throw new Error('Error al obtener las métricas de volumen');
+      }
+      const data = await response.json();
+      
+      setReporteData({
+        tiempoCalibracion: "N/A",
+        volumenEquipos: {
+          recibidos: data.volumen_trabajo.equipos_recibidos || 0,
+          calibrados: data.volumen_trabajo.equipos_calibrados || 0,
+          entregados: data.volumen_trabajo.equipos_entregados || 0,
+          pendientes: data.volumen_trabajo.equipos_pendientes || 0
+        },
+        estados: data.estados || {}
+      });
+    } catch (error) {
+      console.error('Error fetching volume metrics:', error);
+      Alert.alert('Error', 'No se pudo cargar las métricas de volumen');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const generarPDF = async () => {
     const htmlContent = `
       <html>
         <head>
           <style>
-            body {
-              font-family: Arial, sans-serif;
-              color: #1251B7; /* Color secundario */
-              background-color: #fff;
-              margin: 0;
-              padding: 0;
-            }
-            h1 {
-              text-align: center;
-              color: #FF8F00; /* Color principal */
-              margin-top: 30px;
-            }
-            .container {
-              padding: 20px;
-            }
-            .sectionTitle {
-              font-weight: bold;
-              font-size: 18px;
-              color: #FF8F00; /* Color principal */
-              text-align: center;
-              margin-top: 30px;
-              text-transform: uppercase;
-            }
-            .table {
-              width: 100%;
-              border-collapse: collapse;
-              margin-top: 20px;
-            }
-            .table th, .table td {
-              padding: 12px;
-              text-align: left;
-              border: 1px solid #ddd;
-            }
-            .table th {
-              background-color: #FF8F00; /* Color principal */
-              color: #fff;
-              font-size: 16px;
-            }
-            .table td {
-              background-color: #f4f4f4;
-            }
-            .table .highlight {
-              background-color: #1251B7; /* Color secundario */
-              color: #fff;
-            }
-            .listItem {
-              font-size: 14px;
-              color: #1251B7; /* Color secundario */
-              margin-bottom: 5px;
-            }
-            .productivitySection {
-              margin-top: 20px;
-            }
+            body { font-family: Arial, sans-serif; color: #1251B7; background-color: #fff; margin: 0; padding: 0; }
+            h1 { text-align: center; color: #FF8F00; margin-top: 30px; }
+            .container { padding: 20px; }
+            .sectionTitle { font-weight: bold; font-size: 18px; color: #FF8F00; text-align: center; margin-top: 30px; text-transform: uppercase; }
+            .table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            .table th, .table td { padding: 12px; text-align: left; border: 1px solid #ddd; }
+            .table th { background-color: #FF8F00; color: #fff; font-size: 16px; }
+            .table td { background-color: #f4f4f4; }
+            .table .highlight { background-color: #1251B7; color: #fff; }
+            .listItem { font-size: 14px; color: #1251B7; margin-bottom: 5px; }
+            .productivitySection { margin-top: 20px; }
           </style>
         </head>
         <body>
           <div class="container">
             <h1>Reporte de Equipos - ${mesesTexto[mes]} / ${anio}</h1>
             
-            <p><strong>Tiempo promedio de calibración:</strong> ${tiempoCalibracion}</p>
+            <p><strong>Tiempo promedio de calibración:</strong> ${reporteData.tiempoCalibracion}</p>
             
             <div class="sectionTitle">Resumen de Equipos</div>
             <table class="table">
@@ -113,23 +107,26 @@ const ReporteScreen = ({
                 <th>Pendientes</th>
               </tr>
               <tr>
-                <td>${volumenEquipos.recibidos}</td>
-                <td>${volumenEquipos.calibrados}</td>
-                <td>${volumenEquipos.entregados}</td>
-                <td>${volumenEquipos.pendientes}</td>
+                <td>${reporteData.volumenEquipos.recibidos}</td>
+                <td>${reporteData.volumenEquipos.calibrados}</td>
+                <td>${reporteData.volumenEquipos.entregados}</td>
+                <td>${reporteData.volumenEquipos.pendientes}</td>
               </tr>
             </table>
   
-            <div class="sectionTitle">Productividad del Técnico</div>
-            <div class="productivitySection">
-              ${tecnicos.length > 0 ? (
-                tecnicos.map((tecnico, index) => (
-                  `<p class="listItem">${tecnico}</p>`
-                )).join("")
-              ) : (
-                `<p class="listItem">No hay técnicos asignados</p>`
-              )}
-            </div>
+            <div class="sectionTitle">Estados de Equipos</div>
+            <table class="table">
+              <tr>
+                <th>Estado</th>
+                <th>Cantidad</th>
+              </tr>
+              ${Object.entries(reporteData.estados).map(([estado, cantidad]) => `
+                <tr>
+                  <td>${estado}</td>
+                  <td>${cantidad}</td>
+                </tr>
+              `).join('')}
+            </table>
           </div>
         </body>
       </html>
@@ -167,7 +164,6 @@ const ReporteScreen = ({
         </TouchableOpacity>
       </View>
 
-      {/* Modal Mes */}
       <Modal visible={mostrarModalMes} transparent animationType="slide">
         <View style={styles.modalBackground}>
           <View style={styles.modal}>
@@ -191,7 +187,6 @@ const ReporteScreen = ({
         </View>
       </Modal>
 
-      {/* Modal Año */}
       <Modal visible={mostrarModalAnio} transparent animationType="slide">
         <View style={styles.modalBackground}>
           <View style={styles.modal}>
@@ -215,25 +210,31 @@ const ReporteScreen = ({
         </View>
       </Modal>
 
-      <View style={styles.reportBox}>
-        <Text style={styles.sectionTitle}>Resumen del mes {mesesTexto[mes]} / {anio}</Text>
-        <Text style={styles.text}>📥 Equipos recibidos: {volumenEquipos.recibidos}</Text>
-        <Text style={styles.text}>🛠️ Equipos calibrados: {volumenEquipos.calibrados}</Text>
-        <Text style={styles.text}>📤 Equipos entregados: {volumenEquipos.entregados}</Text>
-        <Text style={styles.text}>⏳ Equipos pendientes: {volumenEquipos.pendientes}</Text>
-        <Text style={styles.text}>⏱️ Tiempo promedio de calibración: {tiempoCalibracion}</Text>
+      {loading ? (
+        <ActivityIndicator size="large" color="#FF8F00" style={styles.loader} />
+      ) : (
+        <View style={styles.reportBox}>
+          <Text style={styles.sectionTitle}>Resumen del mes {mesesTexto[mes]} / {anio}</Text>
+          <Text style={styles.text}>📥 Equipos recibidos: {reporteData.volumenEquipos.recibidos}</Text>
+          <Text style={styles.text}>🛠️ Equipos calibrados: {reporteData.volumenEquipos.calibrados}</Text>
+          <Text style={styles.text}>📤 Equipos entregados: {reporteData.volumenEquipos.entregados}</Text>
+          <Text style={styles.text}>⏳ Equipos pendientes: {reporteData.volumenEquipos.pendientes}</Text>
+          <Text style={styles.text}>⏱️ Tiempo promedio de calibración: {reporteData.tiempoCalibracion}</Text>
 
-        <Text style={styles.sectionTitle}>Productividad del Técnico:</Text>
-        {tecnicos.length > 0 ? (
-          tecnicos.map((tecnico, index) => (
-            <Text key={index} style={styles.text}>{tecnico}</Text>
-          ))
-        ) : (
-          <Text style={styles.text}>No hay técnicos asignados</Text>
-        )}
-      </View>
+          <Text style={styles.sectionTitle}>Estados de Equipos:</Text>
+          {Object.entries(reporteData.estados).map(([estado, cantidad]) => (
+            <Text key={estado} style={styles.text}>
+              {estado}: {cantidad}
+            </Text>
+          ))}
+        </View>
+      )}
 
-      <TouchableOpacity style={styles.button} onPress={generarPDF}>
+      <TouchableOpacity 
+        style={styles.button} 
+        onPress={generarPDF}
+        disabled={loading}
+      >
         <Text style={styles.buttonText}>Generar PDF</Text>
       </TouchableOpacity>
     </View>
@@ -251,7 +252,7 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: 'bold',
     marginBottom: 20,
-    color: '#1251B7', // Color secundario
+    color: '#1251B7',
   },
   pickerContainer: {
     flexDirection: 'row',
@@ -266,7 +267,7 @@ const styles = StyleSheet.create({
     padding: 10,
     minWidth: 120,
     alignItems: 'center',
-    borderColor: '#FF8F00', // Color principal
+    borderColor: '#FF8F00',
   },
   reportBox: {
     width: '100%',
@@ -280,16 +281,16 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginBottom: 10,
     textAlign: 'center',
-    color: '#FF8F00', // Color principal
+    color: '#FF8F00',
   },
   text: {
     marginVertical: 3,
     textAlign: 'center',
-    color: '#1251B7', // Color secundario
+    color: '#1251B7',
   },
   button: {
     marginTop: 20,
-    backgroundColor: '#FF8F00', // Color principal
+    backgroundColor: '#FF8F00',
     paddingVertical: 10,
     paddingHorizontal: 20,
     borderRadius: 5,
@@ -321,6 +322,9 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: '#ddd',
+  },
+  loader: {
+    marginTop: 50,
   },
 });
 

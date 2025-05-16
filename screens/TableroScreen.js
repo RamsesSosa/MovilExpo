@@ -2,15 +2,15 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { 
   View, 
   Text, 
-  FlatList, 
   StyleSheet, 
   ScrollView, 
   TouchableOpacity, 
   ActivityIndicator, 
   TextInput,
-  Alert,
   Modal,
-  TextInput as RNTextInput
+  TextInput as RNTextInput,
+  Alert,
+  RefreshControl
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
@@ -18,9 +18,8 @@ import { useNavigation } from '@react-navigation/native';
 const TableroScreen = () => {
   const navigation = useNavigation();
   const [equipos, setEquipos] = useState([]);
-  const [estados, setEstados] = useState([]);
-  const [clientes, setClientes] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [notification, setNotification] = useState({ show: false, message: '', type: '' });
@@ -28,7 +27,6 @@ const TableroScreen = () => {
   const [currentObservation, setCurrentObservation] = useState('');
   const [pendingChange, setPendingChange] = useState(null);
 
-  // Orden de estados (debe coincidir con tu backend)
   const ordenEstados = [
     "Ingreso",
     "En espera",
@@ -40,180 +38,208 @@ const TableroScreen = () => {
     "Entregado"
   ];
 
-  // Función optimizada para obtener datos
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-
+  const fetchEquipos = useCallback(async () => {
     try {
-      const token = await AsyncStorage.getItem('access_token');
+      setLoading(true);
+      setError(null);
       
-      const [equiposRes, estadosRes, clientesRes, historialRes] = await Promise.all([
-        fetch("http://192.168.0.114:8000/api/equipos/", {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        }),
-        fetch("http://192.168.0.114:8000/api/estados-calibracion/", {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        }),
-        fetch("http://192.168.0.114:8000/api/clientes/", {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        }),
-        fetch("http://192.168.0.114:8000/api/historial-equipos/", {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        })
-      ]);
-
-      if (!equiposRes.ok || !estadosRes.ok || !clientesRes.ok || !historialRes.ok) {
-        throw new Error("Error al cargar datos");
-      }
-
-      const [equiposData, estadosData, clientesData, historialData] = await Promise.all([
-        equiposRes.json(),
-        estadosRes.json(),
-        clientesRes.json(),
-        historialRes.json()
-      ]);
-
-      // Procesar estados manteniendo el orden definido
-      const processedEstados = ordenEstados
-        .map(nombre => estadosData.find(e => e.nombre_estado === nombre))
-        .filter(Boolean)
-        .map((estado, index) => ({
-          ...estado,
-          color: getStatusColor(estado.nombre_estado)
-        }));
-
-      // Organizar historial por equipo
-      const historialPorEquipo = historialData.reduce((acc, item) => {
-        acc[item.equipo] = acc[item.equipo] || [];
-        acc[item.equipo].push(item);
-        return acc;
-      }, {});
-
-      // Procesar equipos con su estado actual y cliente
-      const processedEquipos = equiposData.map(equipo => {
-        const historialEquipo = (historialPorEquipo[equipo.id] || [])
-          .sort((a, b) => new Date(b.fecha_cambio) - new Date(a.fecha_cambio));
-        
-        const estadoActual = historialEquipo[0]?.estado || equipo.estado_actual?.id || processedEstados[0]?.id;
-        const cliente = clientesData.find(c => c.id === equipo.cliente) || null;
-
-        return {
-          ...equipo,
-          estado_actual: estadoActual,
-          estado: estadoActual, // Mantener compatibilidad
-          cliente_nombre: cliente?.nombre_cliente || "Cliente no asignado",
-          fecha_entrada: formatDate(equipo.fecha_entrada),
-          historial: historialEquipo
-        };
+      const token = await AsyncStorage.getItem('access_token');
+      const response = await fetch("http://192.168.0.26:8000/api/equipos-proceso/", {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
       });
 
-      setEstados(processedEstados);
-      setClientes(clientesData);
+      if (!response.ok) throw new Error("Error al cargar equipos");
+      
+      const data = await response.json();
+      
+      if (!Array.isArray(data)) throw new Error("Formato de datos incorrecto");
+
+      const processedEquipos = data.map(equipo => ({
+        ...equipo,
+        estado_actual: equipo.estado_actual?.nombre || "Ingreso",
+        cliente_nombre: equipo.cliente || "Cliente no asignado",
+        fecha_entrada: formatDate(equipo.fecha_entrada),
+        ultima_observacion: equipo.ultima_observacion || "Sin observaciones"
+      }));
+
       setEquipos(processedEquipos);
+      await AsyncStorage.setItem('cachedEquipos', JSON.stringify(processedEquipos));
     } catch (err) {
-      setError(`Error al cargar datos: ${err.message}`);
+      console.error("Error en fetchEquipos:", err);
+      
+      // Intentar cargar datos cacheados
+      try {
+        const cachedData = await AsyncStorage.getItem('cachedEquipos');
+        if (cachedData) {
+          setEquipos(JSON.parse(cachedData));
+          setError(`Error de conexión: ${err.message}. Mostrando datos cacheados.`);
+        } else {
+          setError(`Error al cargar datos: ${err.message}`);
+        }
+      } catch (cacheErr) {
+        setError(`Error al cargar datos: ${err.message}`);
+      }
+
       if (err.message.includes("autenticación")) {
         navigation.navigate('Login');
       }
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
   useEffect(() => {
-    const unsubscribe = navigation.addListener('focus', () => {
-      fetchData();
-    });
-
+    const unsubscribe = navigation.addListener('focus', fetchEquipos);
     return unsubscribe;
-  }, [fetchData, navigation]);
+  }, [fetchEquipos]);
 
-  const cambiarEstado = async (equipoId, nuevoEstadoId, direction) => {
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    fetchEquipos();
+  }, []);
+
+  const fetchEquipoDetalle = async (equipoId) => {
     try {
       const token = await AsyncStorage.getItem('access_token');
-      const userString = await AsyncStorage.getItem('user');
-      const user = userString ? JSON.parse(userString) : null;
-      
-      const response = await fetch(`http://192.168.0.114:8000/api/historial-equipos/`, {
-        method: "POST",
+      const response = await fetch(`http://192.168.0.26:8000/api/equipos/${equipoId}/`, {
         headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          equipo: equipoId,
-          estado: nuevoEstadoId,
-          responsable: user?.id || 1,
-          observaciones: currentObservation || `Cambio ${direction}`,
-          fecha_cambio: new Date().toISOString()
-        })
-      });
-  
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || errorData.error || "Error al cambiar estado");
-      }
-
-      // Actualizar el estado local
-      const updatedHistorial = await response.json();
-      
-      setEquipos(prev => prev.map(e => {
-        if (e.id === equipoId) {
-          return {
-            ...e,
-            estado_actual: nuevoEstadoId,
-            estado: nuevoEstadoId,
-            historial: [updatedHistorial, ...e.historial]
-          };
+          'Authorization': `Bearer ${token}`
         }
-        return e;
-      }));
-  
-      setNotification({
-        show: true,
-        message: "Estado actualizado correctamente",
-        type: "success"
       });
+      if (!response.ok) throw new Error("Error al cargar detalle");
+      return await response.json();
     } catch (err) {
-      setNotification({
-        show: true,
-        message: err.message.includes("autenticación") 
-          ? "Debes iniciar sesión para realizar esta acción" 
-          : err.message,
-        type: "error"
-      });
-      
-      if (err.message.includes("autenticación")) {
-        navigation.navigate("Login");
-      }
-    } finally {
-      setShowObservationModal(false);
-      setCurrentObservation("");
-      setPendingChange(null);
-      setTimeout(() => setNotification({ show: false }), 3000);
+      console.error("Error fetching equipo detail:", err);
+      throw err;
     }
   };
 
-  const handleEstadoChange = (equipoId, currentEstadoId, direction) => {
-    const currentIndex = estados.findIndex(e => e.id === currentEstadoId);
+  const cambiarEstado = async (equipoId, nuevoEstadoNombre, direction) => {
+  try {
+    const token = await AsyncStorage.getItem('access_token');
+    
+    // Primero necesitamos obtener el ID del estado basado en su nombre
+    const estadoIndex = ordenEstados.indexOf(nuevoEstadoNombre);
+    if (estadoIndex === -1) throw new Error("Estado no válido");
+    
+    // Asumimos que los IDs coinciden con el índice + 1 (esto puede necesitar ajuste según tu backend)
+    const estadoId = estadoIndex + 1;
+
+    // Primero actualizamos el estado localmente para una respuesta inmediata
+    setEquipos(prev => prev.map(e => {
+      if (e.id === equipoId) {
+        return {
+          ...e,
+          estado_actual: nuevoEstadoNombre,
+          ultima_observacion: currentObservation || `Cambio ${direction}`
+        };
+      }
+      return e;
+    }));
+
+    // Guardamos en caché el cambio
+    const updatedEquipos = equipos.map(e => {
+      if (e.id === equipoId) {
+        return {
+          ...e,
+          estado_actual: nuevoEstadoNombre,
+          ultima_observacion: currentObservation || `Cambio ${direction}`
+        };
+      }
+      return e;
+    });
+    await AsyncStorage.setItem('cachedEquipos', JSON.stringify(updatedEquipos));
+
+    // Luego hacemos la llamada a la API con el estado_id
+    const response = await fetch(`http://192.168.0.26:8000/api/equipos/${equipoId}/cambiar-estado/`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        estado_id: estadoId,  // Enviamos el ID en lugar del nombre
+        observaciones: currentObservation || `Cambio ${direction}`
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || errorData.error || "Error al cambiar estado");
+    }
+
+    // Si la API responde correctamente, actualizamos con los datos frescos
+    const updatedEquipo = await response.json();
+    setEquipos(prev => prev.map(e => {
+      if (e.id === equipoId) {
+        return {
+          ...e,
+          ...updatedEquipo,
+          estado_actual: updatedEquipo.estado_actual?.nombre || nuevoEstadoNombre,
+          cliente_nombre: updatedEquipo.cliente || e.cliente_nombre,
+          fecha_entrada: formatDate(updatedEquipo.fecha_entrada) || e.fecha_entrada,
+          ultima_observacion: updatedEquipo.ultima_observacion || currentObservation || `Cambio ${direction}`
+        };
+      }
+      return e;
+    }));
+
+    // Actualizamos el caché con los datos frescos
+    const freshEquipos = equipos.map(e => {
+      if (e.id === equipoId) {
+        return {
+          ...e,
+          ...updatedEquipo,
+          estado_actual: updatedEquipo.estado_actual?.nombre || nuevoEstadoNombre,
+          cliente_nombre: updatedEquipo.cliente || e.cliente_nombre,
+          fecha_entrada: formatDate(updatedEquipo.fecha_entrada) || e.fecha_entrada,
+          ultima_observacion: updatedEquipo.ultima_observacion || currentObservation || `Cambio ${direction}`
+        };
+      }
+      return e;
+    });
+    await AsyncStorage.setItem('cachedEquipos', JSON.stringify(freshEquipos));
+
+    setNotification({
+      show: true,
+      message: "Estado actualizado correctamente",
+      type: "success"
+    });
+  } catch (err) {
+    console.error("Error en cambiarEstado:", err);
+    setNotification({
+      show: true,
+      message: err.message.includes("autenticación") 
+        ? "Debes iniciar sesión para realizar esta acción" 
+        : err.message,
+      type: "error"
+    });
+
+    // Revertir el cambio local si falla la API
+    fetchEquipos();
+  } finally {
+    setShowObservationModal(false);
+    setCurrentObservation("");
+    setPendingChange(null);
+    setTimeout(() => setNotification({ show: false }), 3000);
+  }
+};
+
+  const handleEstadoChange = (equipoId, currentEstadoNombre, direction) => {
+    const currentIndex = ordenEstados.indexOf(currentEstadoNombre);
     if (currentIndex === -1) return;
     
     const newIndex = direction === 'next' ? currentIndex + 1 : currentIndex - 1;
-    if (newIndex < 0 || newIndex >= estados.length) return;
+    if (newIndex < 0 || newIndex >= ordenEstados.length) return;
     
-    const nuevoEstado = estados[newIndex];
-    if (!nuevoEstado) return;
-    
-    setPendingChange({ equipoId, nuevoEstadoId: nuevoEstado.id, direction });
+    setPendingChange({ 
+      equipoId, 
+      nuevoEstadoNombre: ordenEstados[newIndex], 
+      direction 
+    });
     setShowObservationModal(true);
   };
 
@@ -221,23 +247,21 @@ const TableroScreen = () => {
     if (!pendingChange) return;
     cambiarEstado(
       pendingChange.equipoId,
-      pendingChange.nuevoEstadoId,
+      pendingChange.nuevoEstadoNombre,
       pendingChange.direction
     );
   };
 
-  // Función para agrupar equipos por estado
-  const getEquiposPorEstado = (estadoId) => {
+  const getEquiposPorEstado = (estadoNombre) => {
     return equipos
-      .filter(e => e.estado_actual === estadoId)
+      .filter(e => e.estado_actual === estadoNombre)
       .filter(e =>
-        e.nombre_equipo.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (e.consecutivo && e.consecutivo.toString().includes(searchTerm)) ||
-        e.cliente_nombre.toLowerCase().includes(searchTerm.toLowerCase())
+        e.nombre_equipo?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (e.consecutivo && e.consecutivo.toString().toLowerCase().includes(searchTerm.toLowerCase())) ||
+        e.cliente_nombre?.toLowerCase().includes(searchTerm.toLowerCase())
       );
   };
 
-  // Helper functions
   const getStatusColor = (statusName) => {
     switch(statusName) {
       case "Ingreso": return "#ff9500";
@@ -253,11 +277,16 @@ const TableroScreen = () => {
   };
 
   const formatDate = (dateString) => {
-    const options = { year: 'numeric', month: 'short', day: 'numeric' };
-    return new Date(dateString).toLocaleDateString('es-ES', options);
+    if (!dateString) return "Fecha no disponible";
+    try {
+      const options = { year: 'numeric', month: 'short', day: 'numeric' };
+      return new Date(dateString).toLocaleDateString('es-ES', options);
+    } catch {
+      return dateString;
+    }
   };
 
-  if (loading) return (
+  if (loading && !refreshing) return (
     <View style={styles.loadingContainer}>
       <ActivityIndicator size="large" color="#0000ff" />
       <Text>Cargando datos...</Text>
@@ -269,7 +298,7 @@ const TableroScreen = () => {
       <Text style={styles.errorText}>{error}</Text>
       <TouchableOpacity 
         style={styles.retryButton}
-        onPress={fetchData}
+        onPress={fetchEquipos}
       >
         <Text style={styles.retryText}>Recargar</Text>
       </TouchableOpacity>
@@ -340,81 +369,106 @@ const TableroScreen = () => {
         />
       </View>
 
-      <ScrollView horizontal style={styles.boardContainer}>
-        {estados.map((estado) => {
-          const equiposEnEstado = getEquiposPorEstado(estado.id);
-          const estadoIndex = estados.findIndex(e => e.id === estado.id);
+      <ScrollView 
+        horizontal 
+        style={styles.boardContainer}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+          />
+        }
+      >
+        {ordenEstados.map((estadoNombre) => {
+          const equiposEnEstado = getEquiposPorEstado(estadoNombre);
+          const estadoIndex = ordenEstados.indexOf(estadoNombre);
 
           return (
             <View 
-              key={estado.id} 
-              style={[styles.statusColumn, { borderTopColor: estado.color }]}
+              key={estadoNombre} 
+              style={[styles.statusColumn, { borderTopColor: getStatusColor(estadoNombre) }]}
             >
               <View style={styles.columnHeader}>
-                <Text style={styles.columnTitle}>{estado.nombre_estado}</Text>
+                <Text style={styles.columnTitle}>{estadoNombre}</Text>
                 <View style={styles.countBadge}>
                   <Text style={styles.countText}>{equiposEnEstado.length}</Text>
                 </View>
               </View>
               <ScrollView style={styles.equiposList}>
-                {equiposEnEstado.map(equipo => (
-                  <TouchableOpacity 
-                    key={equipo.id} 
-                    style={styles.equipoCard}
-                    onPress={() => navigation.navigate('DetalleEquipo', { id: equipo.id })}
-                  >
-                    <View style={styles.equipoHeader}>
-                      <Text style={styles.equipoName}>{equipo.nombre_equipo}</Text>
-                      {equipo.consecutivo && (
-                        <Text style={styles.consecutivo}>#{equipo.consecutivo}</Text>
-                      )}
-                    </View>
-                    <View style={styles.equipoDetails}>
-                      <Text>
-                        <Text style={styles.detailLabel}>Cliente: </Text>
-                        {equipo.cliente_nombre}
-                      </Text>
-                      <Text>
-                        <Text style={styles.detailLabel}>Entrada: </Text>
-                        {equipo.fecha_entrada}
-                      </Text>
-                      {equipo.historial[0]?.observaciones && (
-                        <Text style={styles.lastObservation}>
-                          <Text style={styles.detailLabel}>Última observación: </Text>
-                          {equipo.historial[0].observaciones}
+                {equiposEnEstado.length > 0 ? (
+                  equiposEnEstado.map(equipo => (
+                    <TouchableOpacity 
+                      key={equipo.id} 
+                      style={styles.equipoCard}
+                      onPress={async () => {
+                        try {
+                          const detalle = await fetchEquipoDetalle(equipo.id);
+                          navigation.navigate('DetalleEquipo', { 
+                            equipoId: equipo.id,
+                            equipoData: detalle?.equipo || equipo,
+                            historialData: detalle?.historial || []
+                          });
+                        } catch (error) {
+                          console.error("Error al cargar detalle:", error);
+                          Alert.alert("Error", "No se pudo cargar el detalle del equipo");
+                        }
+                      }}
+                    >
+                      <View style={styles.equipoHeader}>
+                        <Text style={styles.equipoName}>{equipo.nombre_equipo || "Nombre no disponible"}</Text>
+                        {equipo.consecutivo && (
+                          <Text style={styles.consecutivo}>#{equipo.consecutivo}</Text>
+                        )}
+                      </View>
+                      <View style={styles.equipoDetails}>
+                        <Text>
+                          <Text style={styles.detailLabel}>Cliente: </Text>
+                          {equipo.cliente_nombre || "No especificado"}
                         </Text>
-                      )}
-                    </View>
-                    <View style={styles.equipoActions}>
-                      <TouchableOpacity
-                        style={[
-                          styles.actionBtn,
-                          estadoIndex <= 0 && styles.disabledBtn
-                        ]}
-                        onPress={(e) => { 
-                          e.stopPropagation(); 
-                          handleEstadoChange(equipo.id, equipo.estado_actual, 'prev'); 
-                        }}
-                        disabled={estadoIndex <= 0}
-                      >
-                        <Text style={styles.actionBtnText}>◄ Anterior</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[
-                          styles.actionBtn,
-                          estadoIndex >= estados.length - 1 && styles.disabledBtn
-                        ]}
-                        onPress={(e) => { 
-                          e.stopPropagation(); 
-                          handleEstadoChange(equipo.id, equipo.estado_actual, 'next'); 
-                        }}
-                        disabled={estadoIndex >= estados.length - 1}
-                      >
-                        <Text style={styles.actionBtnText}>Siguiente ►</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </TouchableOpacity>
-                ))}
+                        <Text>
+                          <Text style={styles.detailLabel}>Entrada: </Text>
+                          {equipo.fecha_entrada}
+                        </Text>
+                        {equipo.ultima_observacion && (
+                          <Text style={styles.lastObservation}>
+                            <Text style={styles.detailLabel}>Última observación: </Text>
+                            {equipo.ultima_observacion}
+                          </Text>
+                        )}
+                      </View>
+                      <View style={styles.equipoActions}>
+                        <TouchableOpacity
+                          style={[
+                            styles.actionBtn,
+                            estadoIndex <= 0 && styles.disabledBtn
+                          ]}
+                          onPress={(e) => { 
+                            e.stopPropagation(); 
+                            handleEstadoChange(equipo.id, equipo.estado_actual, 'prev'); 
+                          }}
+                          disabled={estadoIndex <= 0}
+                        >
+                          <Text style={styles.actionBtnText}>◄ Anterior</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[
+                            styles.actionBtn,
+                            estadoIndex >= ordenEstados.length - 1 && styles.disabledBtn
+                          ]}
+                          onPress={(e) => { 
+                            e.stopPropagation(); 
+                            handleEstadoChange(equipo.id, equipo.estado_actual, 'next'); 
+                          }}
+                          disabled={estadoIndex >= ordenEstados.length - 1}
+                        >
+                          <Text style={styles.actionBtnText}>Siguiente ►</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </TouchableOpacity>
+                  ))
+                ) : (
+                  <Text style={styles.emptyStateText}>No hay equipos en este estado</Text>
+                )}
               </ScrollView>
             </View>
           );
@@ -424,6 +478,7 @@ const TableroScreen = () => {
   );
 };
 
+// Los estilos permanecen igual que en tu código original
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -645,6 +700,12 @@ const styles = StyleSheet.create({
   actionBtnText: {
     color: 'white',
     fontWeight: 'bold',
+  },
+  emptyStateText: {
+    textAlign: 'center',
+    color: '#999',
+    fontStyle: 'italic',
+    marginTop: 20,
   },
 });
 
