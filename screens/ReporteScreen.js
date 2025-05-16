@@ -7,10 +7,12 @@ import {
   Alert,
   Modal,
   FlatList,
-  ActivityIndicator
+  ActivityIndicator,
+  ScrollView
 } from 'react-native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import { MaterialIcons } from '@expo/vector-icons';
 
 const mesesTexto = [
   "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
@@ -18,17 +20,17 @@ const mesesTexto = [
 ];
 
 const aniosDisponibles = Array.from(
-  { length: new Date().getFullYear() - 1999 },
-  (_, i) => (2000 + i).toString()
+  { length: new Date().getFullYear() - 2024 },
+  (_, i) => (new Date().getFullYear() - i).toString()
 );
 
-const API_BASE_URL = 'http://192.168.0.26:8000/api/';
+const API_BASE_URL = 'http://192.168.0.114:8000/api/';
 const METRICAS_VOLUMEN_URL = `${API_BASE_URL}metricas/volumen/`;
 
 const ReporteScreen = () => {
   const [mes, setMes] = useState(new Date().getMonth());
   const [anio, setAnio] = useState(new Date().getFullYear().toString());
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [reporteData, setReporteData] = useState({
     tiempoCalibracion: "N/A",
     volumenEquipos: {
@@ -50,14 +52,20 @@ const ReporteScreen = () => {
   const fetchMetricasVolumen = async () => {
     setLoading(true);
     try {
-      const response = await fetch(`${METRICAS_VOLUMEN_URL}?mes=${mes + 1}&anio=${anio}`);
+      const url = `${METRICAS_VOLUMEN_URL}?mes=${mes + 1}&año=${anio}`;
+      
+      const response = await fetch(url);
       if (!response.ok) {
-        throw new Error('Error al obtener las métricas de volumen');
+        throw new Error(`Error HTTP: ${response.status}`);
       }
       const data = await response.json();
       
+      if (data.status !== 'success') {
+        throw new Error(data.message || 'Error en los datos recibidos');
+      }
+
       setReporteData({
-        tiempoCalibracion: "N/A",
+        tiempoCalibracion: "N/A", // Aún no implementado en el backend
         volumenEquipos: {
           recibidos: data.volumen_trabajo.equipos_recibidos || 0,
           calibrados: data.volumen_trabajo.equipos_calibrados || 0,
@@ -68,80 +76,111 @@ const ReporteScreen = () => {
       });
     } catch (error) {
       console.error('Error fetching volume metrics:', error);
-      Alert.alert('Error', 'No se pudo cargar las métricas de volumen');
+      Alert.alert('Error', `No se pudo cargar las métricas: ${error.message}`);
+      // Resetear a valores por defecto en caso de error
+      setReporteData({
+        tiempoCalibracion: "N/A",
+        volumenEquipos: {
+          recibidos: 0,
+          calibrados: 0,
+          entregados: 0,
+          pendientes: 0
+        },
+        estados: {}
+      });
     } finally {
       setLoading(false);
     }
   };
 
   const generarPDF = async () => {
-    const htmlContent = `
-      <html>
-        <head>
-          <style>
-            body { font-family: Arial, sans-serif; color: #1251B7; background-color: #fff; margin: 0; padding: 0; }
-            h1 { text-align: center; color: #FF8F00; margin-top: 30px; }
-            .container { padding: 20px; }
-            .sectionTitle { font-weight: bold; font-size: 18px; color: #FF8F00; text-align: center; margin-top: 30px; text-transform: uppercase; }
-            .table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-            .table th, .table td { padding: 12px; text-align: left; border: 1px solid #ddd; }
-            .table th { background-color: #FF8F00; color: #fff; font-size: 16px; }
-            .table td { background-color: #f4f4f4; }
-            .table .highlight { background-color: #1251B7; color: #fff; }
-            .listItem { font-size: 14px; color: #1251B7; margin-bottom: 5px; }
-            .productivitySection { margin-top: 20px; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <h1>Reporte de Equipos - ${mesesTexto[mes]} / ${anio}</h1>
-            
-            <p><strong>Tiempo promedio de calibración:</strong> ${reporteData.tiempoCalibracion}</p>
-            
-            <div class="sectionTitle">Resumen de Equipos</div>
-            <table class="table">
-              <tr>
-                <th>Recibidos</th>
-                <th>Calibrados</th>
-                <th>Entregados</th>
-                <th>Pendientes</th>
-              </tr>
-              <tr>
-                <td>${reporteData.volumenEquipos.recibidos}</td>
-                <td>${reporteData.volumenEquipos.calibrados}</td>
-                <td>${reporteData.volumenEquipos.entregados}</td>
-                <td>${reporteData.volumenEquipos.pendientes}</td>
-              </tr>
-            </table>
-  
-            <div class="sectionTitle">Estados de Equipos</div>
-            <table class="table">
-              <tr>
-                <th>Estado</th>
-                <th>Cantidad</th>
-              </tr>
-              ${Object.entries(reporteData.estados).map(([estado, cantidad]) => `
-                <tr>
-                  <td>${estado}</td>
-                  <td>${cantidad}</td>
-                </tr>
-              `).join('')}
-            </table>
-          </div>
-        </body>
-      </html>
-    `;
-  
+    setLoading(true);
     try {
+      const htmlContent = `
+        <html>
+          <head>
+            <style>
+              body { font-family: Arial, sans-serif; color: #1251B7; background-color: #fff; margin: 0; padding: 0; }
+              h1 { text-align: center; color: #FF8F00; margin-top: 30px; }
+              .container { padding: 20px; }
+              .sectionTitle { font-weight: bold; font-size: 18px; color: #FF8F00; text-align: center; margin-top: 30px; text-transform: uppercase; }
+              .table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+              .table th, .table td { padding: 12px; text-align: left; border: 1px solid #ddd; }
+              .table th { background-color: #FF8F00; color: #fff; font-size: 16px; }
+              .table td { background-color: #f4f4f4; }
+              .table .highlight { background-color: #1251B7; color: #fff; }
+              .listItem { font-size: 14px; color: #1251B7; margin-bottom: 5px; }
+              .productivitySection { margin-top: 20px; }
+              .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+              .logo { width: 100px; height: auto; }
+              .date { font-size: 14px; color: #666; }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <div class="header">
+                <div class="date">Generado: ${new Date().toLocaleDateString()}</div>
+                <h1>Reporte de Equipos</h1>
+                <div class="date">${mesesTexto[mes]} ${anio}</div>
+              </div>
+              
+              <p><strong>Tiempo promedio de calibración:</strong> ${reporteData.tiempoCalibracion}</p>
+              
+              <div class="sectionTitle">Resumen de Equipos</div>
+              <table class="table">
+                <tr>
+                  <th>Recibidos</th>
+                  <th>Calibrados</th>
+                  <th>Entregados</th>
+                  <th>Pendientes</th>
+                </tr>
+                <tr>
+                  <td>${reporteData.volumenEquipos.recibidos}</td>
+                  <td>${reporteData.volumenEquipos.calibrados}</td>
+                  <td>${reporteData.volumenEquipos.entregados}</td>
+                  <td>${reporteData.volumenEquipos.pendientes}</td>
+                </tr>
+              </table>
+    
+              <div class="sectionTitle">Estados de Equipos</div>
+              <table class="table">
+                <tr>
+                  <th>Estado</th>
+                  <th>Cantidad</th>
+                </tr>
+                ${Object.entries(reporteData.estados).map(([estado, cantidad]) => `
+                  <tr>
+                    <td>${estado}</td>
+                    <td>${cantidad}</td>
+                  </tr>
+                `).join('')}
+              </table>
+            </div>
+          </body>
+        </html>
+      `;
+    
       const { uri } = await Print.printToFileAsync({ html: htmlContent });
       if (uri) {
-        Alert.alert("PDF Generado", "El PDF se ha generado con éxito.");
-        await Sharing.shareAsync(uri);
+        Alert.alert("Éxito", "El PDF se ha generado correctamente.");
+        await Sharing.shareAsync(uri, { dialogTitle: 'Compartir Reporte' });
       }
     } catch (error) {
-      console.error(error);
-      Alert.alert("Error", "No se pudo generar el PDF.");
+      console.error('Error al generar PDF:', error);
+      Alert.alert("Error", "No se pudo generar el PDF. Por favor intente nuevamente.");
+    } finally {
+      setLoading(false);
     }
+  };
+
+  const renderItemEstado = ({ item }) => {
+    const [estado, cantidad] = item;
+    return (
+      <View style={styles.estadoItem}>
+        <Text style={styles.estadoNombre}>{estado}</Text>
+        <Text style={styles.estadoCantidad}>{cantidad}</Text>
+      </View>
+    );
   };
 
   return (
@@ -152,15 +191,23 @@ const ReporteScreen = () => {
         <TouchableOpacity
           style={styles.selector}
           onPress={() => setMostrarModalMes(true)}
+          disabled={loading}
         >
-          <Text>Mes: {mesesTexto[mes]}</Text>
+          <View style={styles.selectorContent}>
+            <Text style={styles.selectorText}>Mes: {mesesTexto[mes]}</Text>
+            <MaterialIcons name="arrow-drop-down" size={24} color="#FF8F00" />
+          </View>
         </TouchableOpacity>
 
         <TouchableOpacity
           style={styles.selector}
           onPress={() => setMostrarModalAnio(true)}
+          disabled={loading}
         >
-          <Text>Año: {anio}</Text>
+          <View style={styles.selectorContent}>
+            <Text style={styles.selectorText}>Año: {anio}</Text>
+            <MaterialIcons name="arrow-drop-down" size={24} color="#FF8F00" />
+          </View>
         </TouchableOpacity>
       </View>
 
@@ -179,7 +226,7 @@ const ReporteScreen = () => {
                     setMostrarModalMes(false);
                   }}
                 >
-                  <Text>{item}</Text>
+                  <Text style={styles.modalItemText}>{item}</Text>
                 </TouchableOpacity>
               )}
             />
@@ -202,7 +249,7 @@ const ReporteScreen = () => {
                     setMostrarModalAnio(false);
                   }}
                 >
-                  <Text>{item}</Text>
+                  <Text style={styles.modalItemText}>{item}</Text>
                 </TouchableOpacity>
               )}
             />
@@ -211,31 +258,53 @@ const ReporteScreen = () => {
       </Modal>
 
       {loading ? (
-        <ActivityIndicator size="large" color="#FF8F00" style={styles.loader} />
-      ) : (
-        <View style={styles.reportBox}>
-          <Text style={styles.sectionTitle}>Resumen del mes {mesesTexto[mes]} / {anio}</Text>
-          <Text style={styles.text}>📥 Equipos recibidos: {reporteData.volumenEquipos.recibidos}</Text>
-          <Text style={styles.text}>🛠️ Equipos calibrados: {reporteData.volumenEquipos.calibrados}</Text>
-          <Text style={styles.text}>📤 Equipos entregados: {reporteData.volumenEquipos.entregados}</Text>
-          <Text style={styles.text}>⏳ Equipos pendientes: {reporteData.volumenEquipos.pendientes}</Text>
-          <Text style={styles.text}>⏱️ Tiempo promedio de calibración: {reporteData.tiempoCalibracion}</Text>
-
-          <Text style={styles.sectionTitle}>Estados de Equipos:</Text>
-          {Object.entries(reporteData.estados).map(([estado, cantidad]) => (
-            <Text key={estado} style={styles.text}>
-              {estado}: {cantidad}
-            </Text>
-          ))}
+        <View style={styles.loaderContainer}>
+          <ActivityIndicator size="large" color="#FF8F00" />
+          <Text style={styles.loaderText}>Cargando datos...</Text>
         </View>
+      ) : (
+        <ScrollView style={styles.scrollContainer} contentContainerStyle={styles.scrollContent}>
+          <View style={styles.reportBox}>
+            <Text style={styles.sectionTitle}>Resumen del mes {mesesTexto[mes]} {anio}</Text>
+            
+            <View style={styles.metricasContainer}>
+              <View style={styles.metricaItem}>
+                <Text style={styles.metricaNumero}>{reporteData.volumenEquipos.recibidos}</Text>
+                <Text style={styles.metricaTexto}>Recibidos</Text>
+              </View>
+              <View style={styles.metricaItem}>
+                <Text style={styles.metricaNumero}>{reporteData.volumenEquipos.calibrados}</Text>
+                <Text style={styles.metricaTexto}>Calibrados</Text>
+              </View>
+              <View style={styles.metricaItem}>
+                <Text style={styles.metricaNumero}>{reporteData.volumenEquipos.entregados}</Text>
+                <Text style={styles.metricaTexto}>Entregados</Text>
+              </View>
+              <View style={styles.metricaItem}>
+                <Text style={styles.metricaNumero}>{reporteData.volumenEquipos.pendientes}</Text>
+                <Text style={styles.metricaTexto}>Pendientes</Text>
+              </View>
+            </View>
+
+            <Text style={styles.sectionTitle}>Distribución por estados</Text>
+            <FlatList
+              data={Object.entries(reporteData.estados)}
+              renderItem={renderItemEstado}
+              keyExtractor={(item) => item[0]}
+              scrollEnabled={false}
+              contentContainerStyle={styles.estadosList}
+            />
+          </View>
+        </ScrollView>
       )}
 
       <TouchableOpacity 
-        style={styles.button} 
+        style={[styles.button, loading && styles.buttonDisabled]} 
         onPress={generarPDF}
         disabled={loading}
       >
         <Text style={styles.buttonText}>Generar PDF</Text>
+        <MaterialIcons name="picture-as-pdf" size={20} color="white" />
       </TouchableOpacity>
     </View>
   );
@@ -244,87 +313,162 @@ const ReporteScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: '#f5f5f5',
     padding: 20,
-    alignItems: 'center',
   },
   title: {
     fontSize: 24,
     fontWeight: 'bold',
     marginBottom: 20,
     color: '#1251B7',
+    textAlign: 'center',
   },
   pickerContainer: {
     flexDirection: 'row',
-    gap: 20,
+    justifyContent: 'space-between',
     marginBottom: 20,
-    flexWrap: 'wrap',
-    justifyContent: 'center',
   },
   selector: {
     borderWidth: 1,
-    borderRadius: 5,
+    borderRadius: 8,
     padding: 10,
-    minWidth: 120,
-    alignItems: 'center',
+    width: '48%',
+    backgroundColor: 'white',
     borderColor: '#FF8F00',
+    elevation: 2,
+  },
+  selectorContent: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  selectorText: {
+    color: '#1251B7',
+    fontSize: 16,
+  },
+  scrollContainer: {
+    flex: 1,
+    width: '100%',
+  },
+  scrollContent: {
+    paddingBottom: 20,
   },
   reportBox: {
-    width: '100%',
+    backgroundColor: 'white',
+    borderRadius: 10,
     padding: 20,
-    borderWidth: 1,
-    borderRadius: 5,
-    borderColor: '#ccc',
+    elevation: 3,
   },
   sectionTitle: {
     fontWeight: 'bold',
-    fontSize: 16,
-    marginBottom: 10,
+    fontSize: 18,
+    marginBottom: 15,
     textAlign: 'center',
     color: '#FF8F00',
   },
-  text: {
-    marginVertical: 3,
-    textAlign: 'center',
+  metricasContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    marginBottom: 20,
+  },
+  metricaItem: {
+    width: '48%',
+    backgroundColor: '#f8f8f8',
+    borderRadius: 8,
+    padding: 15,
+    marginBottom: 10,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  metricaNumero: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#1251B7',
+    marginBottom: 5,
+  },
+  metricaTexto: {
+    fontSize: 14,
+    color: '#666',
+  },
+  estadosList: {
+    paddingHorizontal: 5,
+  },
+  estadoItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  estadoNombre: {
+    fontSize: 16,
+    color: '#333',
+  },
+  estadoCantidad: {
+    fontSize: 16,
+    fontWeight: 'bold',
     color: '#1251B7',
   },
   button: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
     marginTop: 20,
     backgroundColor: '#FF8F00',
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 5,
+    paddingVertical: 12,
+    borderRadius: 8,
+    elevation: 3,
+    gap: 10,
+  },
+  buttonDisabled: {
+    backgroundColor: '#ccc',
   },
   buttonText: {
     color: 'white',
     fontWeight: 'bold',
+    fontSize: 16,
   },
   modalBackground: {
     flex: 1,
-    backgroundColor: '#00000099',
+    backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center',
     alignItems: 'center',
   },
   modal: {
-    backgroundColor: '#fff',
+    backgroundColor: 'white',
     width: '80%',
-    maxHeight: 300,
+    maxHeight: '60%',
     borderRadius: 10,
     padding: 20,
+    elevation: 5,
   },
   modalTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    marginBottom: 10,
+    marginBottom: 15,
     color: '#FF8F00',
+    textAlign: 'center',
   },
   modalItem: {
-    paddingVertical: 10,
+    paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#ddd',
+    borderBottomColor: '#eee',
   },
-  loader: {
-    marginTop: 50,
+  modalItemText: {
+    fontSize: 16,
+    color: '#333',
+  },
+  loaderContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loaderText: {
+    marginTop: 10,
+    color: '#666',
   },
 });
 
