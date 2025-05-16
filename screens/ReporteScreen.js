@@ -65,7 +65,7 @@ const ReporteScreen = () => {
       }
 
       setReporteData({
-        tiempoCalibracion: "N/A", // Aún no implementado en el backend
+        tiempoCalibracion: "N/A",
         volumenEquipos: {
           recibidos: data.volumen_trabajo.equipos_recibidos || 0,
           calibrados: data.volumen_trabajo.equipos_calibrados || 0,
@@ -77,7 +77,7 @@ const ReporteScreen = () => {
     } catch (error) {
       console.error('Error fetching volume metrics:', error);
       Alert.alert('Error', `No se pudo cargar las métricas: ${error.message}`);
-      // Resetear a valores por defecto en caso de error
+      
       setReporteData({
         tiempoCalibracion: "N/A",
         volumenEquipos: {
