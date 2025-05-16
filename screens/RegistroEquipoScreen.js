@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, TextInput, Alert, ScrollView,
   StyleSheet, Modal, TouchableOpacity, FlatList, ActivityIndicator
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { KeyboardAvoidingView, Platform } from 'react-native';
+
+const API_URL = 'http://192.168.0.26:8000/api';
 
 const RegistroEquipoScreen = () => {
   const navigation = useNavigation();
@@ -19,25 +21,62 @@ const RegistroEquipoScreen = () => {
   const [clienteSeleccionado, setClienteSeleccionado] = useState(null);
   const [modalVisible, setModalVisible] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [clientesPage, setClientesPage] = useState(1);
+  const [clientesTotalPages, setClientesTotalPages] = useState(1);
+  const [clientesLoadingMore, setClientesLoadingMore] = useState(false);
 
-  useEffect(() => {
-    const fetchClientes = async () => {
-      try {
+  // Función para cargar clientes con paginación
+  const fetchClientes = useCallback(async (page = 1, reset = true) => {
+    try {
+      if (reset) {
         setLoading(true);
-        const response = await fetch('http://192.168.0.114:8000/api/clientes/');
-        const data = await response.json();
-        if (response.ok) {
-          setClientes(data);
-        } else {
-          throw new Error(data.message || 'Error al cargar clientes');
-        }
-      } catch (error) {
-        Alert.alert('Error', error.message);
-      } finally {
-        setLoading(false);
+      } else {
+        setClientesLoadingMore(true);
       }
-    };
-    fetchClientes();
+      
+      const response = await fetch(`${API_URL}/clientes/?page=${page}`);
+      const data = await response.json();
+      
+      if (response.ok) {
+        const nuevosClientes = data.results || [];
+        const count = data.count || 0;
+        const nextPage = data.next;
+        const hasMore = !!nextPage;
+
+        setClientes(reset ? nuevosClientes : [...clientes, ...nuevosClientes]);
+        setClientesTotalPages(hasMore ? page + 1 : page);
+        setClientesPage(page);
+      } else {
+        throw new Error(data.message || 'Error al cargar clientes');
+      }
+    } catch (error) {
+      console.error('Error fetching clientes:', {
+        message: error.message,
+        status: error.response?.status,
+        data: error.response?.data
+      });
+      
+      if (error.response?.status === 404) {
+        setClientesTotalPages(clientesPage);
+      } else {
+        Alert.alert('Error', 'No se pudieron cargar los clientes');
+      }
+    } finally {
+      setLoading(false);
+      setClientesLoadingMore(false);
+    }
+  }, [clientes, clientesPage]);
+
+  // Función para cargar más clientes
+  const handleLoadMoreClientes = () => {
+    if (!clientesLoadingMore && clientesPage < clientesTotalPages) {
+      fetchClientes(clientesPage + 1, false);
+    }
+  };
+
+  // Carga inicial de clientes
+  useEffect(() => {
+    fetchClientes(1, true);
   }, []);
 
   const handleSubmit = async () => {
@@ -59,7 +98,7 @@ const RegistroEquipoScreen = () => {
 
     try {
       setLoading(true);
-      const response = await fetch('http://192.168.0.114:8000/api/equipos/', {
+      const response = await fetch(`${API_URL}/equipos/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -82,6 +121,15 @@ const RegistroEquipoScreen = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const renderFooter = () => {
+    if (!clientesLoadingMore) return null;
+    return (
+      <View style={styles.footer}>
+        <ActivityIndicator size="small" color="#4CAF50" />
+      </View>
+    );
   };
 
   if (loading && clientes.length === 0) {
@@ -114,19 +162,22 @@ const RegistroEquipoScreen = () => {
         <Modal visible={modalVisible} animationType="slide">
           <View style={styles.modalContainer}>
             <FlatList
-              data={clientes}
-              keyExtractor={(item) => item.id.toString()}
+              data={[{id: null, nombre_cliente: 'Seleccione un cliente'}, ...clientes]}
+              keyExtractor={(item) => item.id ? item.id.toString() : 'all'}
               renderItem={({ item }) => (
                 <TouchableOpacity
                   style={styles.item}
                   onPress={() => {
-                    setClienteSeleccionado(item);
+                    setClienteSeleccionado(item.id ? item : null);
                     setModalVisible(false);
                   }}
                 >
                   <Text>{item.nombre_cliente}</Text>
                 </TouchableOpacity>
               )}
+              onEndReached={handleLoadMoreClientes}
+              onEndReachedThreshold={0.5}
+              ListFooterComponent={renderFooter}
             />
             <TouchableOpacity
               style={[styles.button, styles.cancelButton]}
@@ -237,6 +288,11 @@ const styles = StyleSheet.create({
   },
   loadingContainer: {
     flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  footer: {
+    padding: 10,
     justifyContent: 'center',
     alignItems: 'center',
   },

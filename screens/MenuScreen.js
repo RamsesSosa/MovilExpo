@@ -1,12 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList, Alert } from 'react-native';
+import { 
+  View, 
+  Text, 
+  StyleSheet, 
+  TouchableOpacity, 
+  FlatList, 
+  Alert,
+  ScrollView,
+  ActivityIndicator,
+  Button
+} from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { useIsFocused } from '@react-navigation/native';
+import { useIsFocused, useFocusEffect } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const Tab = createBottomTabNavigator();
 
+// Componente para la pantalla de acceso rápido
 const QuickAccessScreen = ({ navigation }) => (
   <View style={styles.container}>
     <Text style={styles.title}>Accesos Rápidos</Text>
@@ -17,7 +29,6 @@ const QuickAccessScreen = ({ navigation }) => (
         { id: '3', name: 'Historial Calibracion', icon: 'history', screen: 'HistorialCalibracion', color: '#6A1B9A' },
         { id: '6', name: 'Tablero Tareas', icon: 'dashboard', screen: 'Tablero', color: '#F9A825' },
         { id: '5', name: 'Generar Reporte', icon: 'assessment', screen: 'Reporte', color: '#D32F2F' },
-        
       ]}
       keyExtractor={(item) => item.id}
       numColumns={2}
@@ -35,17 +46,16 @@ const QuickAccessScreen = ({ navigation }) => (
   </View>
 );
 
-
-
+// Componente para el scanner QR
 const QRScannerScreen = ({ navigation }) => {
   const [facing, setFacing] = useState('back');
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
-  const isFocused = useIsFocused(); // Para manejar el foco de la pantalla
+  const isFocused = useIsFocused();
 
   useEffect(() => {
     if (isFocused) {
-      setScanned(false); // Reinicia el estado cuando la pantalla está enfocada
+      setScanned(false);
     }
   }, [isFocused]);
 
@@ -70,24 +80,49 @@ const QRScannerScreen = ({ navigation }) => {
     );
   }
 
-  const handleBarCodeScanned = ({ data }) => {
+  const handleBarCodeScanned = async ({ data }) => {
     setScanned(true);
     
     let equipoId = null;
     try {
+      // Intenta extraer el ID de una URL
       const url = new URL(data);
       const pathParts = url.pathname.split('/').filter(part => part !== '');
       if (pathParts[0] === 'equipos' && pathParts[1]) {
         equipoId = pathParts[1];
       }
     } catch (e) {
-      console.log("No es una URL válida");
+      // Si no es una URL, verifica si es directamente un ID numérico
+      if (/^\d+$/.test(data)) {
+        equipoId = data;
+      }
     }
 
     if (equipoId) {
-      navigation.navigate('DetalleEquipo', { 
-        id: parseInt(equipoId) // Cambiado a 'id' para que coincida con tu pantalla de detalles
-      });
+      try {
+        const token = await AsyncStorage.getItem('access_token');
+        const response = await fetch(`http://192.168.0.26:8000/api/equipos/${equipoId}/`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+
+        if (response.ok) {
+          // Navegamos directamente a la pantalla DetalleEquipo con los parámetros
+          navigation.navigate('DetalleEquipo', { 
+            equipoId: parseInt(equipoId),
+            refreshKey: Date.now() // Añadimos clave de actualización
+          });
+        } else {
+          throw new Error("Equipo no encontrado");
+        }
+      } catch (error) {
+        Alert.alert(
+          'Error',
+          'No se pudo cargar la información del equipo',
+          [{ text: 'OK', onPress: () => setScanned(false) }]
+        );
+      }
     } else {
       Alert.alert(
         'QR no válido',
@@ -96,7 +131,6 @@ const QRScannerScreen = ({ navigation }) => {
       );
     }
   };
-
 
   const toggleCameraFacing = () => {
     setFacing(current => (current === 'back' ? 'front' : 'back'));
@@ -131,130 +165,8 @@ const QRScannerScreen = ({ navigation }) => {
   );
 };
 
-const ContenidoScreen = ({ route }) => {
-  const { qrData, equipoId } = route.params || {};
-  const [equipo, setEquipo] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  // Datos de ejemplo (en producción deberías hacer una llamada a la API)
-  useEffect(() => {
-    if (equipoId) {
-      // Simulamos una llamada a la API con un timeout
-      setTimeout(() => {
-        setEquipo({
-          nombre_equipo: "Nuevo equipoS",
-          consecutivo: "EQ-2023-045",
-          marca: "Keysight",
-          modelo: "PNA-L N5232C",
-          numero_serie: "US12345678",
-          estado: "operativo"
-        });
-        setLoading(false);
-      }, 1000);
-    } else {
-      setLoading(false);
-    }
-  }, [equipoId]);
-
-  // Mapeo de estados a colores
-  const estados = {
-    operativo: { nombre: "Operativo", color: "#4CAF50" },
-    mantenimiento: { nombre: "En Mantenimiento", color: "#FFC107" },
-    baja: { nombre: "De Baja", color: "#F44336" },
-    calibracion: { nombre: "En Calibración", color: "#2196F3" }
-  };
-
-  const estadoActual = equipo?.estado ? estados[equipo.estado] || { nombre: "Desconocido", color: "#9E9E9E" } : null;
-
-  if (loading) {
-    return (
-      <View style={styles.container}>
-        <Text>Cargando información del equipo...</Text>
-      </View>
-    );
-  }
-
-  return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Detalles del Equipo</Text>
-      
-      {equipoId ? (
-        <>
-          {/* Nueva sección con el diseño de tarjeta */}
-          {equipo && (
-            <View style={styles.gridContainer}>
-              <View style={styles.card}>
-                <Text style={styles.cardTitle}>Información del Equipo</Text>
-                
-                <View style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>Nombre:</Text>
-                  <Text style={styles.infoValue}>
-                    {equipo?.nombre_equipo || "No especificado"}
-                  </Text>
-                </View>
-                
-                <View style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>Consecutivo:</Text>
-                  <Text style={styles.infoValue}>
-                    {equipo?.consecutivo || "No especificado"}
-                  </Text>
-                </View>
-                
-                <View style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>Marca:</Text>
-                  <Text style={styles.infoValue}>
-                    {equipo?.marca || "No especificado"}
-                  </Text>
-                </View>
-                
-                <View style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>Modelo:</Text>
-                  <Text style={styles.infoValue}>
-                    {equipo?.modelo || "No especificado"}
-                  </Text>
-                </View>
-                
-                <View style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>N° Serie:</Text>
-                  <Text style={styles.infoValue}>
-                    {equipo?.numero_serie || "No especificado"}
-                  </Text>
-                </View>
-                
-                {estadoActual && (
-                  <View style={styles.infoRow}>
-                    <Text style={styles.infoLabel}>Estado Actual:</Text>
-                    <View style={[styles.estadoBadge, { backgroundColor: estadoActual.color }]}>
-                      <Text style={styles.estadoBadgeText}>{estadoActual.nombre}</Text>
-                    </View>
-                  </View>
-                )}
-              </View>
-            </View>
-          )}
-
-          {/* Sección original con los detalles del QR */}
-          <View style={styles.detailContainer}>
-            <Text style={styles.label}>ID del Equipo:</Text>
-            <Text style={styles.detailText}>{equipoId}</Text>
-          </View>
-          
-          <View style={styles.detailContainer}>
-            <Text style={styles.label}>URL completa:</Text>
-            <Text style={styles.detailText}>{qrData}</Text>
-          </View>
-        </>
-      ) : (
-        <View style={styles.detailContainer}>
-          <Text style={styles.label}>Datos escaneados:</Text>
-          <Text style={styles.detailText}>{qrData || 'No hay datos válidos'}</Text>
-        </View>
-      )}
-    </View>
-  );
-};
-
-const MenuScreen = () => {
+// Componente principal del menú
+const MenuScreen = ({ navigation }) => {
   return (
     <Tab.Navigator
       screenOptions={{
@@ -272,40 +184,52 @@ const MenuScreen = () => {
           ),
           tabBarLabel: 'Inicio'
         }} 
-    />
+      />
 
       <Tab.Screen 
         name="QRScanner" 
         component={QRScannerScreen} 
         options={{
-            headerShown: false,
-            tabBarIcon: ({ focused, size }) => (
-              <MaterialIcons 
-                name="qr-code-scanner" 
-                size={size} 
-                color={focused ? '#000' : 'gray'}
-              />
-            ),
-            tabBarLabel: 'Escáner QR'
+          headerShown: false,
+          tabBarIcon: ({ color, size }) => (
+            <MaterialIcons name="qr-code-scanner" color={color} size={size} />
+          ),
+          tabBarLabel: 'Escáner QR'
         }} 
-      />
-
-
-      <Tab.Screen 
-        name="ScannerContent" 
-        component={ContenidoScreen} 
-        options={{
-          tabBarButton: () => null,
-        }}
       />
     </Tab.Navigator>
   );
 };
 
+// Estilos (se mantienen igual)
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    justifyContent: 'flex-start',
+    padding: 20,
+    backgroundColor: '#f5f5f5',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  errorContent: {
+    alignItems: 'center',
+  },
+  errorIcon: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    marginBottom: 10,
+  },
+  noEquipoContainer: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
   },
@@ -313,7 +237,106 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: 'bold',
     marginBottom: 20,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  backButton: {
+    fontSize: 24,
+    fontWeight: 'bold',
+  },
+  gridContainer: {
+    flexDirection: 'column',
+    gap: 20,
+  },
+  card: {
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    padding: 15,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  cardTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 15,
     color: '#333',
+  },
+  infoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+    alignItems: 'center',
+  },
+  infoLabel: {
+    fontWeight: '600',
+    color: '#555',
+  },
+  infoValue: {
+    flex: 1,
+    marginLeft: 10,
+    textAlign: 'right',
+  },
+  estadoBadge: {
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 15,
+    alignSelf: 'flex-end',
+  },
+  estadoBadgeText: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  responsableSection: {
+    marginBottom: 20,
+  },
+  historialSection: {
+    marginTop: 20,
+  },
+  historialList: {
+    marginTop: 10,
+  },
+  historialItem: {
+    flexDirection: 'row',
+    marginBottom: 15,
+    alignItems: 'flex-start',
+  },
+  historialEstado: {
+    padding: 8,
+    borderRadius: 5,
+    marginRight: 10,
+    minWidth: 100,
+    alignItems: 'center',
+  },
+  historialEstadoText: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  historialDetails: {
+    flex: 1,
+  },
+  historialUsuario: {
+    fontWeight: '600',
+    marginBottom: 3,
+  },
+  historialFecha: {
+    color: '#666',
+    fontSize: 12,
+    marginBottom: 3,
+  },
+  historialAccion: {
+    fontStyle: 'italic',
+    color: '#555',
+  },
+  sinHistorial: {
+    padding: 15,
+    alignItems: 'center',
   },
   button: {
     backgroundColor: '#FF8F00',
@@ -326,12 +349,6 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 18,
     fontWeight: 'bold',
-  },
-  quickAccessItem: {
-    display: 'none' // eliminado porque ya no se usa
-  },
-  quickAccessText: {
-    display: 'none' // eliminado porque ya no se usa
   },
   camera: {
     flex: 1,
@@ -349,7 +366,11 @@ const styles = StyleSheet.create({
     borderRadius: 50,
   },
   overlay: {
-    flex: 1,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     backgroundColor: 'transparent',
     flexDirection: 'column',
   },
@@ -366,29 +387,6 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,143,0,0.8)',
     borderWidth: 2,
     borderRadius: 10,
-  },
-  detailContainer: {
-    marginBottom: 20,
-    width: '100%',
-  },
-  label: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 5,
-    color: '#FF8F00',
-  },
-  detailText: {
-    fontSize: 16,
-    backgroundColor: '#f0f0f0',
-    padding: 15,
-    borderRadius: 8,
-    color: '#333',
-  },
-  // Nuevos estilos para la tarjeta
-  gridContainer: {
-    width: '100%',
-    padding: 15,
-    marginBottom: 20,
   },
   cardAccess: {
     backgroundColor: '#fff',
@@ -411,33 +409,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#333',
     textAlign: 'center',
-  },
-  infoRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 10,
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-  },
-  infoLabel: {
-    fontWeight: 'bold',
-    color: '#555',
-    fontSize: 16,
-  },
-  infoValue: {
-    color: '#333',
-    fontSize: 16,
-  },
-  estadoBadge: {
-    borderRadius: 15,
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-  },
-  estadoBadgeText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: 'bold',
   },
 });
 
